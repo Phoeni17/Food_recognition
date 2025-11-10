@@ -13,6 +13,7 @@ MODEL_PATH = "model.h5"
 DATA_DIR = "duancuoiki"
 IMG_SIZE = (128, 128)
 CONF_THRESHOLD = 0.6
+QR_IMAGE_PATH = "qr_momo.jpg"  # ảnh QR chuyển khoản
 
 # === LOAD MODEL ===
 model = load_model(MODEL_PATH)
@@ -33,9 +34,8 @@ PRICE_TABLE = {
     "DAU HU SOT CA": 20000
 }
 
-
+# === HÀM CHUẨN HÓA ===
 def normalize_name(name):
-    """Chuẩn hóa tên lớp để so với bảng giá"""
     name = name.strip().upper()
     name = unicodedata.normalize('NFD', name)
     name = re.sub(r'[\u0300-\u036f]', '', name)
@@ -43,9 +43,8 @@ def normalize_name(name):
     name = re.sub(r'\s+', ' ', name)
     return name
 
-
+# === HÀM CẮT VÙNG ẢNH ===
 def detect_food_regions(image_bgr):
-    """Cắt 5 vùng khay cơm: Canh, Cơm, Rau, Thịt, Trứng"""
     h, w = image_bgr.shape[:2]
     return [
         ("Canh", image_bgr[int(h * 0.03):int(h * 0.43), int(w * 0.02):int(w * 0.48)]),
@@ -55,9 +54,8 @@ def detect_food_regions(image_bgr):
         ("Trứng", image_bgr[int(h * 0.55):int(h * 0.97), int(w * 0.40):int(w * 0.60)])
     ]
 
-
+# === HÀM DỰ ĐOÁN ===
 def predict_food(pil_img):
-    """Dự đoán món ăn"""
     img_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
     parts = detect_food_regions(img_bgr)
 
@@ -71,8 +69,12 @@ def predict_food(pil_img):
         preds = model.predict(arr, verbose=0)[0]
 
         idx = np.argmax(preds)
-        class_name = class_names[idx]
-        conf = float(preds[idx])
+        if idx >= len(class_names):
+            class_name = "Unknown"
+            conf = float(np.max(preds))
+        else:
+            class_name = class_names[idx]
+            conf = float(preds[idx])
 
         norm_name = normalize_name(class_name)
         matched_price = 0
@@ -91,7 +93,7 @@ def predict_food(pil_img):
             "price": matched_price
         })
 
-        # Vẽ overlay text trên từng ROI
+        # Vẽ overlay text
         roi_pil = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(roi_pil)
         draw.rectangle([(0, 0), (roi_pil.width, 60)], fill=(0, 0, 0, 160))
@@ -109,7 +111,6 @@ uploaded_file = st.file_uploader("📸 Upload ảnh khay cơm", type=["jpg", "pn
 use_webcam = st.checkbox("🎥 Dùng webcam", value=False)
 
 captured_image = None
-
 if use_webcam:
     st.info("🔹 Mở webcam và chụp khay cơm, sau đó nhấn 'Phân tích'.")
     camera_image = st.camera_input("📷 Webcam")
@@ -122,7 +123,7 @@ elif uploaded_file:
 else:
     analyze = st.button("🔍 Phân tích")
 
-# === XỬ LÝ PHÂN TÍCH ===
+# === PHÂN TÍCH ẢNH ===
 if analyze and captured_image is not None:
     st.image(captured_image, caption="Ảnh khay cơm")
     dish_details, total_price, result_images = predict_food(captured_image)
@@ -136,10 +137,41 @@ if analyze and captured_image is not None:
     st.subheader("📸 Ảnh từng vùng món ăn:")
     st.image(result_images, width=200)
 
-    # Lưu ảnh nếu cần
     filename = f"tray_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
     captured_image.save(filename)
     st.info(f"💾 Ảnh đã lưu: {filename}")
+
+    # === THANH TOÁN ===
+    st.subheader("💳 Chọn phương thức thanh toán:")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("💵 Thanh toán tiền mặt"):
+            st.session_state["payment_method"] = "cash"
+
+    with col2:
+        if st.button("🏧 Thanh toán chuyển khoản"):
+            st.session_state["payment_method"] = "transfer"
+
+    # Hiển thị bước xác nhận
+    if "payment_method" in st.session_state:
+        method = st.session_state["payment_method"]
+
+        if method == "cash":
+            st.info("Phương thức: 💵 Tiền mặt")
+            if st.button("✅ Xác nhận thanh toán"):
+                st.success("🎉 Thanh toán tiền mặt thành công!")
+                del st.session_state["payment_method"]
+
+        elif method == "transfer":
+            st.info("Phương thức: 🏧 Chuyển khoản")
+            if os.path.exists(QR_IMAGE_PATH):
+                st.image(QR_IMAGE_PATH, caption="📱 Quét mã QR để thanh toán", width=250)
+            else:
+                st.warning("⚠️ Không tìm thấy ảnh mã QR. Hãy thêm file qr_momo.jpg vào thư mục.")
+            if st.button("✅ Xác nhận thanh toán"):
+                st.success("🎉 Thanh toán chuyển khoản thành công!")
+                del st.session_state["payment_method"]
 
 elif analyze:
     st.warning("⚠️ Hãy tải ảnh hoặc bật webcam trước khi phân tích.")
